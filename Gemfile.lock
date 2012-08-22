@@ -1,0 +1,21 @@
+PATH
+  remote: /Users/caleb/src/em-ssh
+  specs:
+    em-ssh (0.4.1)
+      eventmachine
+      net-ssh
+
+GEM
+  remote: http://rubygems.org/
+  specs:
+    eventmachine (0.12.10)
+    highline (1.6.2)
+    net-ssh (2.1.4)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  em-ssh!
+  highline (= 1.6.2)
+  net-ssh (= 2.1.4)

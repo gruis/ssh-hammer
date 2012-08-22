@@ -36,7 +36,9 @@ class Crasher
     opts.each{|k,v| self.instance_variable_set("@#{k}".intern, v)}
     @uri      = uri
     @wait_str = wait_str
-    @session_cnt  = 0
+    @session_cnt   = 0
+    @tries         = 5
+    @retry_pause ||= @pause * 5
     Fiber.new { yield self }.resume if block_given?
   end 
 
@@ -48,12 +50,16 @@ class Crasher
   end
 
   def hammer
-    start = Time.new
+    @start = Time.new
     start_hammers
     EM::PeriodicTimer.new(2) do
-      print "\r#{@session_cnt} sessions (#{@hammers}/#{@concurrency}) @#{elapsed(start)} minutes  "
+      print "#{stat}"
     end
   end 
+
+  def stat
+    "\r#{' ' * 120}\r#{@session_cnt} sessions (#{@hammers}/#{@concurrency}) @#{@start && elapsed(@start)} minutes "
+  end # stat
 
   def elapsed(since)
     ((Time.new - since) / 60).round(2)
@@ -64,29 +70,35 @@ class Crasher
     @concurrency  = concurrency
     @session_cnt += concurrency
     @hammers      = concurrency
-    puts "switch concurrency is #{concurrency}; initial sessions: #{@session_cnt}"
+    print "\r#{stat} switch concurrency is #{concurrency} "
     concurrency.times do |i|
       Fiber.new { 
-        print "#{i} "
         verify(i)
         @hammers -= 1
         if @hammers <= 0
-          $stderr.puts "all hammers dead: waiting #{@timeout * 9}"
-          EM::Timer.new(@timeout * 9) { 
-            $stderr.puts "resuming hammers"
-            Fiber.new { start_hammers }.resume 
-          } 
+          EM::Timer.new(@pause) { Fiber.new { start_hammers }.resume } 
         end 
       }.resume
       sleep(@pause)
     end
     
-    succeed(@session_cnt) if concurrency == 0
+    if concurrency == 0
+      @tries -= 1
+      if @tries > 0
+        open? do |is_open|
+          if is_open
+            puts "concurrency is at 0, but port 22 appears to be open; retrying up to #{@tries} times in #{@retry_pause}s"
+            EM::Timer.new(@retry_pause)
+          else
+            succeed(@session_cnt)
+          end 
+        end
+      end 
+    end
   end
 
 
   def verify(id)
-    $stderr.puts "v"
     f = Fiber.current
     EM::Ssh::Shell.new(@uri.host, @uri.user, @uri.password, :timeout => @timeout, :reconnect => false, :net_ssh => {:nego_timeout => 2}) do |shell|
       shell.errback do |e| 
@@ -103,7 +115,6 @@ class Crasher
           print "."
           shell.close
           shell.connection.close_connection
-          print "<"
         rescue => e
           print "*"
         end
@@ -112,39 +123,6 @@ class Crasher
     end
     Fiber.yield
   end # verify(id)
-
-  def verify_until_dead(id)
-    f     = Fiber.current
-    tries = @min_retries
-    work  = lambda do
-      EM::Ssh::Shell.new(@uri.host, @uri.user, @uri.password, :timeout => @timeout, :net_ssh => {:nego_timeout => 2}) do |shell|
-        shell.callback do
-          begin
-            shell.expect(@wait_str)
-            @session_cnt += 1
-            shell.expect(@wait_str, "show version\n")
-            shell.send_data("exit\n")
-            print "#{id}."
-            shell.close
-            shell.connection.close_connection
-            print 'd'
-            EM::Timer.new(10, &work)
-          rescue => e
-            print "*"
-            $stderr.puts "tries: #{tries}"
-            (tries -= 1) <= 0 ? f.resume(false) : EM::Timer.new(10, &work)
-          end
-        end
-        shell.errback do |e|
-          puts "#{id}: e #{e}"
-          $stderr.puts "tries: #{tries}"
-         (tries -= 1) <= 0 ? f.resume(false) : EM::Timer.new(10, &work)
-        end
-      end
-    end
-    EM.next_tick(&work)
-    Fiber.yield
-  end 
 
   def open?(timeout = 5, &blk)
     return unless block_given?
@@ -211,7 +189,7 @@ class Crasher
       return if finished
       finished = true
       timer && timer.cancel
-      puts "\nmax concurrent connections is #{cnt} (#{e})"
+      print "#{stat} max concurrent connections is #{cnt} "
       shells.each do |s| 
         s.send_data("exit\n") 
         s.close
@@ -220,12 +198,12 @@ class Crasher
       f.resume(cnt)
     end
 
-    print "determining max concurrent connections "
+    print "#{stat} determining max concurrent connections "
     timer = EM::PeriodicTimer.new(1) do
       EM::Ssh::Shell.new(@uri.host, @uri.user, @uri.password, :timeout => @timeout, :net_ssh => {:nego_timeout => 2}) do |shell|
         shell.callback do
           shells << shell
-          print "."
+          print "-"
           begin
             shell.expect(@wait_str)
             cnt += 1
@@ -248,6 +226,7 @@ opts = OptionParser.new
 opts.on('-p', '--prompt String', String, "prompt to expect after login default: #{wait_str.inspect}") { |w| wait_str = w }
 opts.on('-t', '--timeout Integer', Integer, 'number of seconds to wait for the device to open an ssh connection ') {|t| options[:timeout] = t}
 opts.on('--pause Decimal', Float, 'number of seconds to wait before establishing a new connection') {|t| options[:pause] = t }
+opts.on('--retry-pause Decimal', Float, 'number of seconds to wait before restarting the test after the device appears to have crashed') {|t| options[:retry_pause] = t }
 opts.on('-r', '--retries Integer', Integer, 'number of times each thread should retry the connection before giving up') {|r| options[:min_retries] = r }
 opts.on('-f', '--find-concurrency', 'determine the current maximum number of concurrent session supported') {  options[:find_concurrency] = true }
 opts.on('--open-connections', 'determine number of open connections the device supports') { options[:open_connections] }
@@ -270,13 +249,13 @@ uri.port     = 22 if uri.port.nil?
 
 
 EM.run do
-  EM::Ssh.logger(::Logger::DEBUG)
+  #EM::Ssh.logger(::Logger::DEBUG)
   Crasher.new(uri, wait_str, options) do |crasher|
     if options[:find_concurrency]
-      puts "max concurrency: #{crasher.max_concurrency}"
+      puts "\nmax concurrency: #{crasher.max_concurrency}\n\n"
       EM.stop
     elsif options[:open_connections]
-      puts "max open connections #{crasher.max_connections}"
+      puts "\nmax open connections #{crasher.max_connections}\n\n"
       EM.stop
     else  
       start = Time.new
