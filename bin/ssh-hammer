@@ -10,11 +10,7 @@ class Passwords
     def get(*path)
       path     = path.flatten
       file_key = path.join(".")
-      
-      if (password = ENV[path.join"_"])
-        return password
-      end
-      
+      return password if (password = ENV[path.join"_"])
       [File.expand_path("~/.passwords"), "/etc/passwords"].each do |dir|
         pfile = File.join(dir, file_key)
         next unless File.exists?(pfile)
@@ -24,11 +20,10 @@ class Passwords
       
       if STDIN.tty?
         password = ask("What is #{path} password? "){|q| q.echo = "*" }
-      end # STDIN.tty?
+      end 
       return password
-    end # get(*path)
+    end 
   end # << self
-  
 end # class::Passwords
 
 
@@ -151,12 +146,67 @@ class Crasher
     Fiber.yield
   end 
 
+  def open?(timeout = 5, &blk)
+    return unless block_given?
+    work = lambda do
+      begin
+        Timeout.timeout(timeout || 5) { sock  = TCPSocket::new(@uri.host, 22) } 
+      rescue Timeout::Error => e
+        return false
+      rescue Errno::ECONNREFUSED => e
+        return false
+      rescue Errno::EHOSTDOWN => e
+        return false
+      ensure
+        sock.close if sock.respond_to?(:close)
+      end 
+    end
+    EM.defer(work, &blk)
+  end
+
+  def max_connections
+    f      = Fiber.current
+    cnt    = 0
+    shells = []
+    timer  = EM::PeriodicTimer.new(1) do
+      EM::Ssh::Shell.new(@uri.host, @uri.user, @uri.password, :timeout => @timeout, :net_ssh => {:nego_timeout => 2}) do |shell|
+        shell.errback { |e| print "*" }
+        shell.callback do
+          shells << shell
+          begin
+            shell.expect(@wait_str)
+            cnt += 1
+            shell.expect(@wait_str, "show version\n")
+            print "."
+          rescue => e
+            print "*"
+          end
+        end
+      end
+    end
+
+    EM::PeriodicTimer.new(5) do
+      open? do |is_open|
+        unless is_open
+          timer && timer.cancel
+          shells.each do |s|
+            s.close
+            s.connection.close_connection
+          end
+          f.resume(cnt)
+        end
+      end
+    end
+
+    Fiber.yield
+  end
+
   def max_concurrency
     f = Fiber.current
     cnt      = 0
     finished = false
     shells   = []
-    tiemr    = nil
+    timer    = nil
     done = lambda do |e|
       return if finished
       finished = true
@@ -195,11 +245,12 @@ end
 wait_str = "Dev-BS2(TEST)# "
 options  = {}
 opts = OptionParser.new
-opts.on('-t', '--timeout Integer', Integer, 'number of seconds to wait for the switch to open an ssh connection ') {|t| options[:timeout] = t}
+opts.on('-p', '--prompt String', String, "prompt to expect after login default: #{wait_str.inspect}") { |w| wait_str = w }
+opts.on('-t', '--timeout Integer', Integer, 'number of seconds to wait for the device to open an ssh connection ') {|t| options[:timeout] = t}
 opts.on('--pause Decimal', Float, 'number of seconds to wait before establishing a new connection') {|t| options[:pause] = t }
 opts.on('-r', '--retries Integer', Integer, 'number of times each thread should retry the connection before giving up') {|r| options[:min_retries] = r }
-opts.on('-f', '--find-concurrency') {  options[:find_concurrency] = true }
-opts.on('-p', '--prompt String', String, "prompt to expect default: #{wait_str.inspect}") { |w| wait_str = w }
+opts.on('-f', '--find-concurrency', 'determine the current maximum number of concurrent session supported') {  options[:find_concurrency] = true }
+opts.on('--open-connections', 'determine number of open connections the device supports') { options[:open_connections] }
 opts.banner = opts.banner + " URL"
 opts.parse!(ARGV)
 
@@ -223,6 +274,9 @@ EM.run do
   Crasher.new(uri, wait_str, options) do |crasher|
     if options[:find_concurrency]
       puts "max concurrency: #{crasher.max_concurrency}"
+      EM.stop
+    elsif options[:open_connections]
+      puts "max open connections #{crasher.max_connections}"
       EM.stop
     else  
       start = Time.new
