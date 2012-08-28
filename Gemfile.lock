@@ -1,16 +1,29 @@
 PATH
   remote: /Users/caleb/src/em-ssh
   specs:
-    em-ssh (0.4.1)
+    em-ssh (0.4.2)
       eventmachine
       net-ssh
 
 GEM
   remote: http://rubygems.org/
   specs:
+    coderay (1.0.7)
     eventmachine (0.12.10)
     highline (1.6.2)
+    method_source (0.8)
     net-ssh (2.1.4)
+    pry (0.9.10)
+      coderay (~> 1.0.5)
+      method_source (~> 0.8)
+      slop (~> 3.3.1)
+    pry-remote-em (0.4.3)
+      eventmachine
+      highline
+      pry (~> 0.9.6)
+      rb-readline
+    rb-readline (0.4.2)
+    slop (3.3.2)
 
 PLATFORMS
   ruby
@@ -19,3 +32,4 @@ DEPENDENCIES
   em-ssh!
   highline (= 1.6.2)
   net-ssh (= 2.1.4)
+  pry-remote-em (~> 0.4.1)
