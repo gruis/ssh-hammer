@@ -5,6 +5,7 @@ require "highline/import"
 require "em-ssh"
 require "em-ssh/shell"
 require "pry-remote-em/server"
+require "ssh-hammer/stats"
 
 class Passwords
   class << self
@@ -30,7 +31,7 @@ end # class::Passwords
 
 
 
-class Crasher
+class SshHammer
   include EM::Deferrable
   def initialize(uri, wait_str, opts = {})
     opts      = {:pause => 0.5, :timeout => 10, :min_retries => 5}.merge(opts)
@@ -73,7 +74,12 @@ class Crasher
     @hammers      = concurrency
     print "\r#{stat} switch concurrency is #{concurrency} "
     
-    @tries = @min_tries if concurrency > 0
+    if concurrency > 0 && @tries != @min_tries
+      @tries       = @min_retries 
+      @retry_pause = @pause * 5
+    end
+
+    Stats.gauge("#{@uri.host}.concurrency", concurrency)
 
     concurrency.times do |i|
       Fiber.new { 
@@ -91,9 +97,8 @@ class Crasher
       if @tries > 0
         open? do |is_open|
           if is_open
-            expo      = @min_retries - @tries
-            pause_for = expo <= 0 ? 1 : expo * @retry_pause
-            puts "concurrency is at 0, but port 22 appears to be open; retrying #{@tries} times in #{pause_for}s"
+            @retry_pause = @retry_pause * 2
+            puts "concurrency is at 0, but port 22 appears to be open; retrying #{@tries} times in #{@retry_pause}s"
             EM::Timer.new(pause_for) { Fiber.new { start_hammers }.resume }
           else
             succeed(@session_cnt)
@@ -122,6 +127,8 @@ class Crasher
       begin
         shell.expect(@wait_str)
         @session_cnt += 1
+        Stats.incr("#{@uri.host}.sessions")
+        Stats.gauge("#{@uri.host}.sessions.total", @session_cnt)
         # this causes a memory leak
         #shell.expect(@wait_str, "show version\n")
         shell.send_data("exit\n")
@@ -293,7 +300,7 @@ uri.port     = 22 if uri.port.nil?
 
 EM.run do
   #EM::Ssh.logger(::Logger::DEBUG)
-  Crasher.new(uri, wait_str, options) do |crasher|
+  SshHammer.new(uri, wait_str, options) do |crasher|
     crasher.remote_pry_em
     if options[:find_concurrency]
       puts "\nmax concurrency: #{crasher.max_concurrency}\n\n"

@@ -1,4 +1,11 @@
 PATH
+  remote: .
+  specs:
+    ssh-hammer (0.0.1)
+      em-ssh (= 0.4.2)
+      net-ssh (= 2.1.4)
+
+PATH
   remote: /Users/caleb/src/em-ssh
   specs:
     em-ssh (0.4.2)
@@ -17,12 +24,10 @@ GEM
       coderay (~> 1.0.5)
       method_source (~> 0.8)
       slop (~> 3.3.1)
-    pry-remote-em (0.4.3)
+    pry-remote-em (0.7.3)
       eventmachine
       highline
-      pry (~> 0.9.6)
-      rb-readline
-    rb-readline (0.4.2)
+      pry (~> 0.9)
     slop (3.3.2)
 
 PLATFORMS
@@ -32,4 +37,5 @@ DEPENDENCIES
   em-ssh!
   highline (= 1.6.2)
   net-ssh (= 2.1.4)
-  pry-remote-em (~> 0.4.1)
+  pry-remote-em (~> 0.7.3)
+  ssh-hammer!
