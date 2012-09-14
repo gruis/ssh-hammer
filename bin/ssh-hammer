@@ -55,6 +55,18 @@ class SshHammer
     @start = Time.new
     start_hammers
     EM::PeriodicTimer.new(2) do
+      threshold      = @concurrency - (@concurrency - 0.20).to_i
+      threshold      = 10 if threshold < 10
+      objs_to_report = ObjectSpace.each_object.to_a
+                        .each_with_object(Hash.new{|h,k| h[k] = 0}) { |o,h| h[o.class] += 1 }
+                        .select{|k,v| v > threshold }
+      objs_to_report.each do |name, cnt|
+        next if name == RubyVM::InstructionSequence
+        Stats.gauge("ssh-hammer.#{@uri.host}.#{name}".gsub('::', '.'), cnt)
+      end 
+      EM.defer(proc { 
+        `ps ax -o pid,rss | grep -E "^[[:space:]]*#{Process::pid}"`.chomp.split(/\s+/).map {|s| s.strip.to_i}[1]
+      }, proc { |m| Stats.gauge("ssh-hammer.#{@uri.host}.memory.used", m) })
       print "#{stat}"
     end
   end 
@@ -99,7 +111,7 @@ class SshHammer
           if is_open
             @retry_pause = @retry_pause * 2
             puts "concurrency is at 0, but port 22 appears to be open; retrying #{@tries} times in #{@retry_pause}s"
-            EM::Timer.new(pause_for) { Fiber.new { start_hammers }.resume }
+            EM::Timer.new(@retry_pause) { Fiber.new { start_hammers }.resume }
           else
             succeed(@session_cnt)
           end 
@@ -270,7 +282,7 @@ class SshHammer
 
 end
 
-wait_str = "Dev-BS2(TEST)# "
+wait_str= "BS2(TEST)SMIS# "
 options  = {}
 opts = OptionParser.new
 opts.on('-p', '--prompt String', String, "prompt to expect after login default: #{wait_str.inspect}") { |w| wait_str = w }
@@ -301,7 +313,7 @@ uri.port     = 22 if uri.port.nil?
 EM.run do
   #EM::Ssh.logger(::Logger::DEBUG)
   SshHammer.new(uri, wait_str, options) do |crasher|
-    crasher.remote_pry_em
+    crasher.remote_pry_em('127.0.0.1', :auto)
     if options[:find_concurrency]
       puts "\nmax concurrency: #{crasher.max_concurrency}\n\n"
       EM.stop
