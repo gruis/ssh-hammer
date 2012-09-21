@@ -131,8 +131,12 @@ class SshHammer
         @session_cnt += 1
         Stats.incr("#{@uri.host}.sessions")
         Stats.gauge("#{@uri.host}.sessions.total", @session_cnt)
-        # this causes a memory leak
-        #shell.expect(@wait_str, "show version\n")
+        # TODO make this configurable
+        shell.expect(@wait_str, "show version\n")
+        shell.expect(@wait_str, "show running-config\n")
+        shell.expect(@wait_str, "show mac-address-table\n")
+        shell.expect(@wait_str, "show interfaces\n")
+        shell.expect(@wait_str, "show vlan\n")
         shell.send_data("exit\n")
         print "."
         shell.disconnect(2)
