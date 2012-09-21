@@ -34,11 +34,10 @@ end # class::Passwords
 class SshHammer
   include EM::Deferrable
   def initialize(uri, wait_str, opts = {})
-    opts      = {:pause => 0.5, :timeout => 10, :min_retries => 5}.merge(opts)
+    opts      = {:pause => 0.5, :timeout => 10, :min_retries => 5, :session_cnt => 0}.merge(opts)
     opts.each{|k,v| self.instance_variable_set("@#{k}".intern, v)}
     @uri      = uri
     @wait_str = wait_str
-    @session_cnt   = 0
     @tries         = @min_retries
     @retry_pause ||= @pause * 5
     Fiber.new { yield self }.resume if block_given?
@@ -52,11 +51,11 @@ class SshHammer
   end
 
   def hammer
-    @start = Time.new
+    @start = Time.new unless @start
     start_hammers
     EM::PeriodicTimer.new(2) do
       EM.defer(proc { 
-        `ps ax -o pid,rss | grep -E "^[[:space:]]*#{Process::pid}"`.chomp.split(/\s+/).map {|s| s.strip.to_i}[1]
+        `ps ax -o pid,rss | grep -E "^[[:space:]]*#{Process::pid}"`.chomp.split(/\s+/).map {|s| s.strip.to_i}[1] * 1024
       }, proc { |m| Stats.gauge("ssh-hammer.#{@uri.host}.memory.used", m) })
       print "#{stat}"
     end
@@ -282,6 +281,8 @@ opts.on('--pause Decimal', Float, 'number of seconds to wait before establishing
 opts.on('--retry-pause Decimal', Float, 'number of seconds to wait before restarting the test after the device appears to have crashed') {|t| options[:retry_pause] = t }
 opts.on('-r', '--retries Integer', Integer, 'number of times each thread should retry the connection before giving up') {|r| options[:min_retries] = r }
 opts.on('-f', '--find-concurrency', 'determine the current maximum number of concurrent session supported') {  options[:find_concurrency] = true }
+opts.on('-s', '--session-count Integer', Integer, 'number of total sessions established up to now') { |c|  options[:session_cnt] = c }
+opts.on('-m', '--minutes Float', Float, 'number of minutes run up to now') {|m| options[:start] = Time.new - m.to_f * 60 }
 opts.on('--open-connections', 'determine number of open connections the device supports') { options[:open_connections] = true }
 opts.banner = opts.banner + " URL"
 opts.parse!(ARGV)
@@ -298,8 +299,6 @@ uri          = URI.parse(ARGV[addr_idx])
 uri.user     = "admin" if uri.user.nil?
 uri.password = Passwords.get(["switch", uri.host]) if uri.password.nil?
 uri.port     = 22 if uri.port.nil?
-
-
 
 EM.run do
   #EM::Ssh.logger(::Logger::DEBUG)
