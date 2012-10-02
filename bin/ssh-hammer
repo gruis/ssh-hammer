@@ -132,12 +132,9 @@ class SshHammer
         Stats.incr("#{@uri.host}.sessions")
         Stats.gauge("#{@uri.host}.sessions.total", @session_cnt)
         # TODO make this configurable
-        shell.expect(@wait_str, "show version\n")
-        shell.expect(@wait_str, "show running-config\n")
-        shell.expect(@wait_str, "show mac-address-table\n")
-        shell.expect(@wait_str, "show interfaces\n")
-        shell.expect(@wait_str, "show vlan\n")
-        shell.send_data("exit\n")
+        @commands.each do |cmd|
+          shell.expect(@wait_str, "#{cmd}\n")
+        end
         print "."
         shell.disconnect(2)
       rescue => e
@@ -288,6 +285,14 @@ opts.on('-f', '--find-concurrency', 'determine the current maximum number of con
 opts.on('-s', '--session-count Integer', Integer, 'number of total sessions established up to now') { |c|  options[:session_cnt] = c }
 opts.on('-m', '--minutes Float', Float, 'number of minutes run up to now') {|m| options[:start] = Time.new - m.to_f * 60 }
 opts.on('--open-connections', 'determine number of open connections the device supports') { options[:open_connections] = true }
+opts.on('-c', '--commands File', String, 'file containing commands to run on the device after each login') do |f|
+
+  unless File.exists?(f = File.expand_path(f))
+    $stderr.puts "#{f.inspect} not found"
+    Process.exit
+  end
+  options[:commands] = IO.read(f).split("\n").map(&:strip).select{|l| l[0] != "#" }
+end
 opts.banner = opts.banner + " URL"
 opts.parse!(ARGV)
 
